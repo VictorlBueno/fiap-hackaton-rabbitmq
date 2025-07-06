@@ -1,114 +1,125 @@
-### Componentes Criados
+# RabbitMQ - AWS Infrastructure
 
-- **Namespace**: `rabbitmq` para isolamento
-- **StatefulSet**: 3 réplicas do RabbitMQ
-- **Services**: 
-  - `rabbitmq`: Headless service para cluster
-  - `rabbitmq-management`: Service para interface web
-- **Storage**: Persistent volumes com EBS
-- **ConfigMap**: Configurações do RabbitMQ
-- **Secret**: Credenciais seguras
-- **Ingress**: Acesso externo à interface de gerenciamento
+Este módulo provisiona uma instância RabbitMQ na AWS usando Terraform, integrada com a VPC do projeto.
 
-### Características
+## Arquitetura
 
-- **Cluster**: 3 nós para alta disponibilidade
-- **Persistência**: Dados armazenados em EBS
-- **Escalável**: Fácil de escalar horizontalmente
-- **Monitoramento**: Interface web de gerenciamento
-- **Seguro**: Credenciais em Kubernetes Secrets
+- **Instância EC2**: Amazon Linux 2 com RabbitMQ instalado
+- **Security Group**: Configurado para permitir tráfego AMQP (5672) e Management UI (15672)
+- **Secrets Manager**: Armazena credenciais de forma segura
+- **VPC**: Utiliza a VPC criada pelo módulo `/vpc`
+- **Subnet**: Instância em subnet privada para segurança
+- **Terraform**: Infraestrutura como código consistente com o projeto
 
 ## Pré-requisitos
 
-- Cluster Kubernetes (EKS recomendado)
-- kubectl configurado
-- AWS EBS CSI Driver instalado
-- NGINX Ingress Controller (opcional)
-
-## Configuração
-
-1. **Certifique-se que o cluster Kubernetes está funcionando**:
-   ```bash
-   kubectl cluster-info
-   ```
-
-2. **Instale o AWS EBS CSI Driver** (se necessário):
-   ```bash
-   kubectl apply -k "github.com/kubernetes-sigs/aws-ebs-csi-driver/deploy/kubernetes/overlays/stable/?ref=release-1.21"
-   ```
+1. VPC criada (`/vpc`)
+2. AWS CLI configurado
+3. Terraform instalado
 
 ## Deploy
 
+### 1. Deploy completo
 ```bash
-cd k8s
-kubectl apply -k .
+make deploy
 ```
 
-## Verificar Status
-
+### 2. Verificar status
 ```bash
-# Verificar pods
-kubectl get pods -n rabbitmq
-
-# Verificar services
-kubectl get svc -n rabbitmq
-
-# Verificar cluster status
-kubectl exec -n rabbitmq rabbitmq-0 -- rabbitmqctl cluster_status
+make status
 ```
 
-## Acessar Interface Web
+## Comandos Disponíveis
 
-```bash
-# Port-forward para acesso local
-kubectl port-forward -n rabbitmq svc/rabbitmq-management 15672:15672
-```
+### Terraform
+- `make init` - Inicializar Terraform
+- `make plan` - Gerar plano
+- `make apply` - Aplicar mudanças
+- `make destroy` - Destruir infraestrutura
+- `make output` - Mostrar outputs
+- `make validate` - Validar configuração
+- `make fmt` - Formatar arquivos
 
-Acesse: http://localhost:15672
-- Usuário: `admin`
-- Senha: `admin123`
+### Operações
+- `make deploy` - Deploy completo
+- `make status` - Status da instância
+- `make logs` - Instruções para acessar logs
+- `make restart` - Reiniciar instância
+- `make get-credentials` - Obter credenciais do Secrets Manager
+- `make test-connection` - Testar conexão
+- `make get-management-url` - URL da interface de gerenciamento
 
-## Destruir
+## Configuração
 
-```bash
-cd k8s
-kubectl delete -k .
-```
+### Variáveis principais
+- `rabbitmq_instance_type`: Tipo de instância EC2 (padrão: t3.micro)
+- `rabbitmq_volume_size`: Tamanho do volume EBS em GB (padrão: 20)
+- `rabbitmq_username`: Usuário do RabbitMQ (padrão: admin)
 
-## Configurações
 
-### Credenciais Padrão
-- **Usuário**: `admin`
-- **Senha**: `admin123`
-- **VHost**: `/`
+### Security Groups
+- **AMQP**: Porta 5672 (apenas do cluster EKS)
+- **Management UI**: Porta 15672 (apenas do cluster EKS)
+- **SSH**: Porta 22 (apenas do cluster EKS)
 
-### Portas
-- **AMQP**: 5672
-- **Management**: 15672
+## Integração com Service
 
-### Storage
-- **Tipo**: EBS GP2
-- **Tamanho**: 10Gi por pod
-- **Expansão**: Habilitada
+O módulo `/service` está configurado para:
+1. Buscar credenciais automaticamente do Secrets Manager
+2. Usar a URL AMQP completa para conexão
+3. Configurar variáveis de ambiente no Kubernetes
+
+### Variáveis de ambiente no Service
+- `RABBITMQ_URL`: URL AMQP completa
+- `RABBITMQ_HOST`: Host da instância
+- `RABBITMQ_PORT`: Porta AMQP (5672)
+- `RABBITMQ_USERNAME`: Usuário
+- `RABBITMQ_PASSWORD`: Senha
 
 ## Monitoramento
 
-O RabbitMQ inclui:
-- Health checks automáticos
-- Interface web de gerenciamento
-- Logs estruturados
-- Métricas de performance
+### Interface de Gerenciamento
+- URL: `http://[PRIVATE_IP]:15672`
+- Usuário: admin
+- Senha: Gerada automaticamente e armazenada no Secrets Manager
 
-## Escalabilidade
-
-Para escalar o cluster:
-```bash
-kubectl scale statefulset rabbitmq -n rabbitmq --replicas=5
-```
+### Logs
+Para acessar os logs da instância:
+1. Acesse o console AWS EC2
+2. Selecione a instância RabbitMQ
+3. Vá em 'Actions' > 'Monitor and troubleshoot' > 'Get system log'
+4. Ou use CloudWatch Logs se configurado
 
 ## Segurança
 
-- Credenciais armazenadas em Kubernetes Secrets
-- Network policies podem ser aplicadas
-- Interface web protegida por autenticação básica
-- Comunicação interna criptografada
+- Instância em subnet privada
+- Security group restritivo
+- Credenciais armazenadas no Secrets Manager
+- Senha gerada automaticamente
+- Firewall local configurado
+
+## Troubleshooting
+
+### Problemas de conexão
+1. Verificar se a instância está rodando: `make status`
+2. Verificar security groups
+3. Testar conectividade: `make test-connection`
+
+### Problemas de autenticação
+1. Obter credenciais: `make get-credentials`
+2. Verificar Secrets Manager
+3. Reiniciar instância se necessário: `make restart`
+
+### Problemas de performance
+1. Verificar tipo de instância
+2. Monitorar uso de CPU/memória
+3. Considerar upgrade da instância
+
+## Limpeza
+
+Para destruir toda a infraestrutura:
+```bash
+make destroy
+```
+
+**⚠️ Atenção**: Isso irá deletar permanentemente a instância e todos os dados.
