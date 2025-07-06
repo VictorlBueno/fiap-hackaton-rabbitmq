@@ -1,63 +1,75 @@
-.PHONY: help deploy destroy status logs port-forward clean
+.PHONY: help init plan apply destroy output clean deploy
 
 help: ## Mostra esta ajuda
 	@echo "Comandos disponíveis:"
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-deploy: ## Deploy do RabbitMQ no Kubernetes
-	cd k8s && kubectl apply -k .
+init: ## Inicializa o Terraform
+	cd terraform && terraform init
 
-destroy: ## Remove o RabbitMQ do Kubernetes
-	cd k8s && kubectl delete -k .
+plan: ## Executa o plan do Terraform
+	cd terraform && terraform plan
 
-status: ## Mostra o status dos recursos do RabbitMQ
-	@echo "=== Pods ==="
-	kubectl get pods -n rabbitmq
+apply: ## Aplica as mudanças do Terraform
+	cd terraform && terraform apply -auto-approve
+
+destroy: ## Destroi a infraestrutura
+	cd terraform && terraform destroy -auto-approve
+
+output: ## Mostra os outputs do Terraform
+	cd terraform && terraform output
+
+validate: ## Valida os arquivos do Terraform
+	cd terraform && terraform validate
+
+fmt: ## Formata os arquivos do Terraform
+	cd terraform && terraform fmt -recursive
+
+clean: ## Remove arquivos temporários
+	cd terraform && rm -rf .terraform .terraform.lock.hcl
+
+deploy: init plan apply output ## Deploy completo do RabbitMQ
+
+get-credentials: ## Obtém as credenciais do RabbitMQ do Secrets Manager
+	aws secretsmanager get-secret-value --secret-id fiap-hack/rabbitmq-credentials --query SecretString --output text | jq -r '.amqp_url'
+
+test-connection: ## Testa a conexão com o RabbitMQ
+	@echo "=== Testando conexão com o RabbitMQ ==="
+	@echo "Host: $(shell cd terraform && terraform output -raw rabbitmq_private_ip)"
+	@echo "Porta AMQP: 5672"
+	@echo "Porta Management: 15672"
 	@echo ""
-	@echo "=== Services ==="
-	kubectl get svc -n rabbitmq
+	@echo "Para testar a conexão AMQP, use:"
+	@echo "aws secretsmanager get-secret-value --secret-id fiap-hack/rabbitmq-credentials --query SecretString --output text | jq -r '.amqp_url'"
 	@echo ""
-	@echo "=== PVCs ==="
-	kubectl get pvc -n rabbitmq
+	@echo "Para acessar a interface de gerenciamento:"
+	@echo "http://$(shell cd terraform && terraform output -raw rabbitmq_private_ip):15672"
+
+status: ## Mostra o status da instância RabbitMQ
+	@echo "=== Status da Instância RabbitMQ ==="
+	@echo "Instance ID: $(shell cd terraform && terraform output -raw rabbitmq_instance_id)"
+	@echo "Private IP: $(shell cd terraform && terraform output -raw rabbitmq_private_ip)"
+	@echo "Management URL: $(shell cd terraform && terraform output -raw rabbitmq_management_url)"
 	@echo ""
-	@echo "=== Cluster Status ==="
-	kubectl exec -n rabbitmq rabbitmq-0 -- rabbitmqctl cluster_status 2>/dev/null || echo "Cluster ainda não está pronto"
+	@echo "Status da instância:"
+	aws ec2 describe-instances --instance-ids $(shell cd terraform && terraform output -raw rabbitmq_instance_id) --query 'Reservations[0].Instances[0].State.Name' --output text
 
-logs: ## Mostra os logs do RabbitMQ
-	kubectl logs -n rabbitmq -l app=rabbitmq --tail=50 -f
+logs: ## Mostra informações sobre logs do RabbitMQ
+	@echo "=== Logs do RabbitMQ ==="
+	@echo "Para acessar os logs, use o console AWS ou CloudWatch:"
+	@echo "1. Acesse o console AWS EC2"
+	@echo "2. Selecione a instância: $(shell cd terraform && terraform output -raw rabbitmq_instance_id)"
+	@echo "3. Vá em 'Actions' > 'Monitor and troubleshoot' > 'Get system log'"
+	@echo ""
+	@echo "Ou use CloudWatch Logs se configurado."
 
-logs-node: ## Mostra logs de um nó específico (use NODE=0,1,2)
-	kubectl logs -n rabbitmq rabbitmq-$(NODE) --tail=50 -f
+restart: ## Reinicia a instância RabbitMQ
+	aws ec2 reboot-instances --instance-ids $(shell cd terraform && terraform output -raw rabbitmq_instance_id)
+	@echo "Instância sendo reiniciada..."
 
-port-forward: ## Faz port-forward para a interface web
-	kubectl port-forward -n rabbitmq svc/rabbitmq-management 15672:15672
 
-port-forward-amqp: ## Faz port-forward para AMQP
-	kubectl port-forward -n rabbitmq svc/rabbitmq 5672:5672
 
-clean: ## Remove recursos órfãos
-	kubectl delete pvc -n rabbitmq --all --ignore-not-found=true
-
-restart: ## Reinicia o StatefulSet
-	kubectl rollout restart statefulset/rabbitmq -n rabbitmq
-
-scale: ## Escala o cluster (use REPLICAS=5)
-	kubectl scale statefulset rabbitmq -n rabbitmq --replicas=$(REPLICAS)
-
-get-credentials: ## Mostra as credenciais do RabbitMQ
+get-management-url: ## Obtém a URL da interface de gerenciamento
+	@echo "Interface de Gerenciamento: $(shell cd terraform && terraform output -raw rabbitmq_management_url)"
 	@echo "Usuário: admin"
-	@echo "Senha: admin123"
-	@echo "Host: rabbitmq.rabbitmq.svc.cluster.local"
-	@echo "Port: 5672"
-
-test-connection: ## Testa conexão AMQP (requer amqp-tools)
-	kubectl port-forward -n rabbitmq svc/rabbitmq 5672:5672 &
-	sleep 2
-	amqp-declare-queue -u amqp://admin:admin123@localhost:5672/ -q test-queue || echo "Conexão falhou"
-	pkill -f "port-forward.*5672"
-
-install-ebs-csi: ## Instala o AWS EBS CSI Driver
-	kubectl apply -k "github.com/kubernetes-sigs/aws-ebs-csi-driver/deploy/kubernetes/overlays/stable/?ref=release-1.21"
-
-install-ingress: ## Instala o NGINX Ingress Controller
-	kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.8.2/deploy/static/provider/aws/deploy.yaml 
+	@echo "Senha: $(shell aws secretsmanager get-secret-value --secret-id fiap-hack/rabbitmq-credentials --query SecretString --output text | jq -r '.password')" 
