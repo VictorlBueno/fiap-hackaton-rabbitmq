@@ -88,7 +88,7 @@ kubectl delete -k .
 
 ### Storage
 - **Tipo**: EBS GP2
-- **Tamanho**: 10Gi por pod
+- **Tamanho**: 1Gi por pod
 - **Expansão**: Habilitada
 
 ## Monitoramento

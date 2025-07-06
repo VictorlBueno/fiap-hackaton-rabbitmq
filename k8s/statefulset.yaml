@@ -77,4 +77,4 @@ spec:
       storageClassName: rabbitmq-storage
       resources:
         requests:
-          storage: 10Gi 
+          storage: 1Gi 
