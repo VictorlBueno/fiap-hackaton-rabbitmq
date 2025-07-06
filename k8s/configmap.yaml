@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rabbitmq-config
+  namespace: rabbitmq
+data:
+  rabbitmq.conf: |
+    # Configurações básicas do RabbitMQ
+    listeners.tcp.default = 5672
+    management.tcp.port = 15672
+    
+    # Configurações de cluster
+    cluster_formation.peer_discovery_backend = rabbit_peer_discovery_classic_config
+    cluster_formation.classic_config.nodes.1 = rabbit@rabbitmq-0.rabbitmq.rabbitmq.svc.cluster.local
+    cluster_formation.classic_config.nodes.2 = rabbit@rabbitmq-1.rabbitmq.rabbitmq.svc.cluster.local
+    cluster_formation.classic_config.nodes.3 = rabbit@rabbitmq-2.rabbitmq.rabbitmq.svc.cluster.local
+    
+    # Configurações de persistência
+    vm_memory_high_watermark.relative = 0.6
+    disk_free_limit.relative = 2.0
+    
+    # Configurações de log
+    log.console = true
+    log.console.level = info
+    
+    # Configurações de performance
+    tcp_listen_options.backlog = 128
+    tcp_listen_options.nodelay = true
+    tcp_listen_options.exit_on_close = false
+    
+    # Configurações de segurança
+    loopback_users = none
+    default_user = admin
+    default_pass = admin123
+    default_vhost = /
+    
+    # Configurações de políticas
+    default_permissions.configure = .*
+    default_permissions.read = .*
+    default_permissions.write = .* 
