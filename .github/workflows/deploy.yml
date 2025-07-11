@@ -1,7 +1,3 @@
-# Este workflow está preparado para rodar em pipelines CI/CD (GitHub Actions) seguindo Gitflow.
-# O kubeconfig do EKS é sempre configurado nos jobs de plano e deploy, garantindo que o Terraform
-# interaja corretamente com o cluster Kubernetes, independente do ambiente local.
-
 name: Deploy Infraestrutura do RabbitMQ
 
 on:
