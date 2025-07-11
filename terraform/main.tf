@@ -7,92 +7,21 @@ data "terraform_remote_state" "vpc" {
   }
 }
 
+data "terraform_remote_state" "eks" {
+  backend = "s3"
+  config = {
+    bucket = "fiap-hack-terraform-state"
+    key    = "eks/terraform.tfstate"
+    region = "us-east-1"
+  }
+}
+
 locals {
   tags = {
     Project     = var.project_name
     Environment = var.environment
     ManagedBy   = "terraform"
     Component   = "rabbitmq"
-  }
-}
-
-resource "aws_security_group" "rabbitmq" {
-  name_prefix = "fiap-hack-rabbitmq-"
-  vpc_id      = data.terraform_remote_state.vpc.outputs.vpc_id
-  
-  ingress {
-    from_port       = 5672
-    to_port         = 5672
-    protocol        = "tcp"
-    security_groups = [data.terraform_remote_state.vpc.outputs.cluster_security_group_id]
-    description     = "AMQP"
-  }
-  
-  ingress {
-    from_port       = 15672
-    to_port         = 15672
-    protocol        = "tcp"
-    security_groups = [data.terraform_remote_state.vpc.outputs.cluster_security_group_id]
-    description     = "Management UI"
-  }
-  
-  ingress {
-    from_port       = 22
-    to_port         = 22
-    protocol        = "tcp"
-    security_groups = [data.terraform_remote_state.vpc.outputs.cluster_security_group_id]
-    description     = "SSH"
-  }
-  
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-  
-  tags = merge(local.tags, {
-    Name = "fiap-hack-rabbitmq-sg"
-  })
-}
-
-resource "aws_instance" "rabbitmq" {
-  ami                    = data.aws_ami.amazon_linux.id
-  instance_type          = var.rabbitmq_instance_type
-  vpc_security_group_ids = [aws_security_group.rabbitmq.id]
-  subnet_id              = data.terraform_remote_state.vpc.outputs.private_subnet_ids[0]
-  
-  root_block_device {
-    volume_size = var.rabbitmq_volume_size
-    volume_type = "gp2"
-    
-    tags = merge(local.tags, {
-      Name = "fiap-hack-rabbitmq-root-volume"
-    })
-  }
-  
-  user_data = base64encode(templatefile("${path.module}/user_data.sh", {
-    rabbitmq_username = var.rabbitmq_username
-    rabbitmq_password = random_password.rabbitmq_password.result
-  }))
-  
-  tags = merge(local.tags, {
-    Name = "fiap-hack-rabbitmq"
-  })
-}
-
-data "aws_ami" "amazon_linux" {
-  most_recent = true
-  owners      = ["amazon"]
-  
-  filter {
-    name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
-  }
-  
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
   }
 }
 
@@ -104,52 +33,188 @@ resource "random_password" "rabbitmq_password" {
   numeric = true
 }
 
-resource "aws_secretsmanager_secret" "rabbitmq_credentials" {
-  name = "${var.project_name}/rabbitmq-credentials"
-  
-  tags = local.tags
+resource "kubernetes_namespace" "rabbitmq" {
+  metadata {
+    name = "rabbitmq"
+    labels = local.tags
+  }
 }
 
-resource "aws_secretsmanager_secret_version" "rabbitmq_credentials" {
-  secret_id = aws_secretsmanager_secret.rabbitmq_credentials.id
-  secret_string = jsonencode({
+resource "kubernetes_config_map" "rabbitmq_config" {
+  metadata {
+    name      = "rabbitmq-config"
+    namespace = kubernetes_namespace.rabbitmq.metadata[0].name
+  }
+
+  data = {
+    "rabbitmq.conf" = <<-EOF
+      default_user = ${var.rabbitmq_username}
+      default_pass = ${random_password.rabbitmq_password.result}
+      default_vhost = /
+    EOF
+  }
+}
+
+resource "kubernetes_secret" "rabbitmq_credentials" {
+  metadata {
+    name      = "rabbitmq-credentials"
+    namespace = kubernetes_namespace.rabbitmq.metadata[0].name
+  }
+
+  data = {
     username = var.rabbitmq_username
     password = random_password.rabbitmq_password.result
-    host     = aws_instance.rabbitmq.private_ip
-    port     = 5672
-    management_port = 15672
-    management_url  = "http://${aws_instance.rabbitmq.private_ip}:15672"
-    amqp_url        = "amqp://${var.rabbitmq_username}:${random_password.rabbitmq_password.result}@${aws_instance.rabbitmq.private_ip}:5672/"
-  })
+  }
+
+  type = "Opaque"
 }
 
-output "rabbitmq_private_ip" {
-  description = "IP privado da instância RabbitMQ"
-  value       = aws_instance.rabbitmq.private_ip
+resource "kubernetes_deployment" "rabbitmq" {
+  metadata {
+    name      = "rabbitmq"
+    namespace = kubernetes_namespace.rabbitmq.metadata[0].name
+    labels    = local.tags
+  }
+
+  spec {
+    replicas = var.rabbitmq_replicas
+
+    selector {
+      match_labels = {
+        app = "rabbitmq"
+      }
+    }
+
+    template {
+      metadata {
+        labels = {
+          app = "rabbitmq"
+        }
+      }
+
+      spec {
+        container {
+          image = "rabbitmq:3.12-management"
+          name  = "rabbitmq"
+
+          port {
+            container_port = 5672
+            name          = "amqp"
+          }
+
+          port {
+            container_port = 15672
+            name          = "management"
+          }
+
+          env {
+            name  = "RABBITMQ_DEFAULT_USER"
+            value = var.rabbitmq_username
+          }
+
+          env {
+            name  = "RABBITMQ_DEFAULT_PASS"
+            value = random_password.rabbitmq_password.result
+          }
+
+          volume_mount {
+            name       = "rabbitmq-config"
+            mount_path = "/etc/rabbitmq"
+          }
+
+          volume_mount {
+            name       = "rabbitmq-data"
+            mount_path = "/var/lib/rabbitmq"
+          }
+
+          resources {
+            limits = {
+              cpu    = "500m"
+              memory = "512Mi"
+            }
+            requests = {
+              cpu    = "250m"
+              memory = "256Mi"
+            }
+          }
+        }
+
+        volume {
+          name = "rabbitmq-config"
+          config_map {
+            name = kubernetes_config_map.rabbitmq_config.metadata[0].name
+          }
+        }
+
+        volume {
+          name = "rabbitmq-data"
+          empty_dir {}
+        }
+      }
+    }
+  }
 }
 
-output "rabbitmq_instance_id" {
-  description = "ID da instância RabbitMQ"
-  value       = aws_instance.rabbitmq.id
+resource "kubernetes_service" "rabbitmq" {
+  metadata {
+    name      = "rabbitmq"
+    namespace = kubernetes_namespace.rabbitmq.metadata[0].name
+    labels    = local.tags
+  }
+
+  spec {
+    selector = {
+      app = "rabbitmq"
+    }
+
+    port {
+      port        = 5672
+      target_port = 5672
+      name        = "amqp"
+    }
+
+    port {
+      port        = 15672
+      target_port = 15672
+      name        = "management"
+    }
+
+    type = "ClusterIP"
+  }
 }
 
-output "rabbitmq_secret_arn" {
-  description = "ARN do secret com as credenciais do RabbitMQ"
-  value       = aws_secretsmanager_secret.rabbitmq_credentials.arn
+output "rabbitmq_namespace" {
+  description = "Namespace do RabbitMQ"
+  value       = kubernetes_namespace.rabbitmq.metadata[0].name
 }
 
-output "rabbitmq_security_group_id" {
-  description = "ID do security group do RabbitMQ"
-  value       = aws_security_group.rabbitmq.id
+output "rabbitmq_service_name" {
+  description = "Nome do service do RabbitMQ"
+  value       = kubernetes_service.rabbitmq.metadata[0].name
 }
 
-output "rabbitmq_management_url" {
-  description = "URL da interface de gerenciamento do RabbitMQ"
-  value       = "http://${aws_instance.rabbitmq.private_ip}:15672"
+output "rabbitmq_service_cluster_ip" {
+  description = "IP do cluster do service RabbitMQ"
+  value       = kubernetes_service.rabbitmq.spec[0].cluster_ip
 }
 
-output "rabbitmq_amqp_url" {
-  description = "URL AMQP do RabbitMQ"
-  value       = "amqp://${var.rabbitmq_username}:${random_password.rabbitmq_password.result}@${aws_instance.rabbitmq.private_ip}:5672/"
+output "rabbitmq_amqp_port" {
+  description = "Porta AMQP do RabbitMQ"
+  value       = 5672
+}
+
+output "rabbitmq_management_port" {
+  description = "Porta de gerenciamento do RabbitMQ"
+  value       = 15672
+}
+
+output "rabbitmq_username" {
+  description = "Usuário do RabbitMQ"
+  value       = var.rabbitmq_username
+}
+
+output "rabbitmq_password" {
+  description = "Senha do RabbitMQ"
+  value       = random_password.rabbitmq_password.result
   sensitive   = true
 } 

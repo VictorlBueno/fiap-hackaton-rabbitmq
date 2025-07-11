@@ -11,27 +11,21 @@ variable "project_name" {
 }
 
 variable "environment" {
-  description = "Ambiente (dev, staging, prod)"
+  description = "Ambiente (dev, staging, production)"
   type        = string
-  default     = "dev"
-}
-
-variable "rabbitmq_instance_type" {
-  description = "Tipo de instância EC2 para o RabbitMQ"
-  type        = string
-  default     = "t3.micro"
-}
-
-variable "rabbitmq_volume_size" {
-  description = "Tamanho do volume EBS em GB"
-  type        = number
-  default     = 20
+  default     = "production"
 }
 
 variable "rabbitmq_username" {
   description = "Usuário do RabbitMQ"
   type        = string
   default     = "admin"
+}
+
+variable "rabbitmq_replicas" {
+  description = "Número de réplicas do RabbitMQ"
+  type        = number
+  default     = 1
 }
 
  
